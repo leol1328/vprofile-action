@@ -105,7 +105,7 @@ jobs:
         run: cat ~/.kube/config
 
       - name: Login to ECR
-        run: kubectl create secret docker-registory regcred --docker-server=${{ secrets.REGISTRY }} --docker-username=AWS --docker-password=$(aws ecr get-login-password)
+        run: kubectl create secret docker-registry regcred --docker-server=${{ secrets.REGISTRY }} --docker-username=AWS --docker-password=$(aws ecr get-login-password)
 
       # https://github.com/marketplace/actions/deploy-helm-chart-to-aws-eks-cluster
       - name: Deploy Helm
