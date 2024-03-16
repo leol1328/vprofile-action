@@ -3,7 +3,7 @@ on: workflow_dispatch # only run the workflow when we manually trigger it. Later
 env:
   AWS_REGION: us-east-2
   ECR_REPOSITORY: vprofileapp
-  EKS_CLUSTER: vprofile-eks
+  EKS_CLUSTER: gitops-eks
 
 jobs:
   Testing:
@@ -55,3 +55,68 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_URL }} # optional
 
+
+  BUILD_AND_PUBLISH:
+  # If you don't mention needs, both jobs will execute parallelly. We want first, the code test job to complete and then it should trigger this job.
+    needs: Testing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@v4
+
+      # https://github.com/marketplace/actions/docker-ecr
+      - name: upload image to ECR
+        uses: appleboy/docker-ecr-action@master
+        with:
+          access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          registry: ${{ secrets.REGISTRY }}
+          repo: ${{ env.ECR_REPOSITORY }}
+          region: ${{ env.AWS_REGION }}
+          tags: latest,${{ github.run_number }}
+          daemon_off: false
+          dockerfile: ./Dockerfile
+          context: ./
+
+# two steps left
+# 1) generate the kube config file by running aws eks command
+# 2) store the registry credentials in Kubernetes
+
+  DeployToEKS:
+    needs: BUILD_AND_PUBLISH
+    runs-on: ubuntu-latest
+    steps:
+      # checkout the code to have helm charts
+      - name: Code Checkou
+        uses: actions/checkout@v4
+
+      # log into aws account
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          region: ${{ env.AWS_REGION }}
+
+      - name: Get Kube config file
+        run: aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS.CLUSTER }}
+
+      - name: Print config file
+        run: cat ~/.kube/config
+
+      - name: Login to ECR
+        run: kubectl create secret docker-registory regcred --docker-server=${{ secrets.REGISTRY }} --docker-username=AWS --docker-password=$(aws ecr get-login-password)
+
+      # https://github.com/marketplace/actions/deploy-helm-chart-to-aws-eks-cluster
+      - name: Deploy Helm
+        uses: bitovi/github-actions-deploy-eks-helm@v1.2.8
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          cluster-name: ${{ env.EKS.CLUSTER }}
+          # config-files: .github/values/dev.yaml
+          chart-path: helm/vprofilecharts
+          namespace: default
+          values: appimage=${{ secrets.REGISTRY }}/${{ env.ECR_REPOSITORY }},apptag=${{ github.run_number }}
+          name: vprofile-stack
